@@ -1,0 +1,1372 @@
+---
+output: 
+  html_document: 
+    toc: yes
+    toc_depth: 3
+editor_options: 
+  chunk_output_type: console
+---
+<script>
+  $(document).ready(function() {
+    $head = $('#header');
+    $head.prepend('<div class="knitr source"><img src="logo.jpg" width="70%" align="center"   ></div>')
+  });
+  
+</script>
+
+---
+title: "Statistical Report - PVD in ACSIS"
+author: "Nir Shlomo"
+date: "JAN 2018"
+output: 
+  html_document: 
+    highlight: zenburn
+    toc: yes
+---
+
+##### ***Investigators: Shlomi Matetzky***
+
+---
+
+<br>
+
+## **Analysis of PVD patients**
+
+### **Population: Patients fron ACSIS 2000-2016 registries with avilable PVD data (N=XXX)**
+
+
+###*Study aim*
+To stratify patients' risk after MI according to prior PVD for ACSIS day.
+
+###*Main outcomes and study groups*
+The main outcomes are: Descriptive statistics & 1-year mortality.
+
+Research comparison is between 2 groups defined by Prior PVD (PPVD):<br>
+PVD = No (*n=XXX*)<br> 
+PVD = Yes (*n=XXX*).
+
+###*Statistical methods*
+
+Patients characteristics was recorded on table-1 for the 2 study groups.<br>
+<br>
+The two groups were tested with chi-square for categorical variables and with anova or Kruskal-Wallis test as appropriate for normal/nonnormal distributed continues variables.<br>
+<br>
+
+Survival analysis between the groups was performed using the Kaplan Meier curves followed by the Log Rank test.
+<br>
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+setwd("C:/Users/nirsh/Dropbox/R_programes/PVD")
+source("C:/Users/nirsh/Dropbox/R_programes/MicFunctionsV1.R")
+
+# source('E:/MicFunctionsV1.R')
+# source('E:/Functions_Dina.R')
+
+library(tableone)
+library(knitr)
+library(kableExtra)
+library(pander)
+library(ggplot2)
+library(survminer)
+library(dplyr)
+library(reshape2)
+library(forestplot)
+
+# OR (95% CI) (x=glm model) - For forest plot
+OR_CI <- function(x){
+  OR <- round(exp(coef(x)),2)[-1]
+  CI <- round(exp(confint(x)),2)
+  list(total=paste0(OR," (",CI[-1,1],",",CI[-1,2],")"),OR=OR,CI=CI[-1,])
+}
+
+# HR (95% CI) (x=Cox model)
+HR_CI <- function(x){
+  HR <- round(exp(coef(x)),2)
+  CI <- round(exp(confint(x)),2)
+  list(total=paste0(HR," (",CI[,1],",",CI[,2],")"),HR=HR,CI=CI)
+}
+```
+
+```{r data transpormations}
+dat <- read.csv("C:/Users/nirsh/Dropbox/SAS_PROGS/acs00_02/CSV_file/UPDATED/R00_16_2.csv",na.strings = c(""," ","N",".","UNKNOWN","A","NA"), header=TRUE) #n=15200
+
+# dat <- read.csv("E:/PVD for Metetzky by Nir/R00_16_2.csv",na.strings = c(""," ","N",".","UNKNOWN","A","NA"), header=TRUE) #n=15212
+
+
+#dat <- droplevels(subset(dat,dat$SOURCE %in% c("S2008", "S2010", "S2013", "S2016") )) #n=7189
+
+
+dat$ADMKLP <- as.factor(dat$ADMKLP)
+dat$time365 <- ifelse(dat$TIME>366,366,dat$TIME)
+dat$time1y <- dat$time365/30.5
+dat$status1y <- ifelse(dat$DIED365=="DECEASED",1,0)
+dat$academic <- factor(ifelse(dat$EDUC=="HIGHER EDUCATION / ACADEMIC",1,0))
+dat$married <- factor(ifelse(dat$MARIT=="MARRIED / ATTACHED",1,0))
+dat$stemi <- factor(ifelse(dat$ADMECG=="ST",1,0))
+dat$HOSTTE <- factor(ifelse(dat$HOSTTE %in% c("YES","NO"),dat$HOSTTE,NA))
+levels(dat$HOSTTE) <- c("NO","YES")
+dat$graceGT140 <- factor(ifelse(dat$GRACE>140,1,0))
+dat$ageGT65 <- factor(ifelse(dat$AGE>65,1,0))
+dat$ageLE65 <- factor(ifelse(dat$AGE<=65,1,0))
+dat$ageGT75 <- ifelse(dat$AGE>=75,1,0)
+dat$creLT1 <- factor(ifelse(dat$HOSCRE<1,1,0))
+dat$ef <- factor(dat$EF_CLASS,levels = c("NORMAL (EF>50%)","MILD (EF40-50%)","MODERATE (EF30-40%)","SEVERE (EF<30%)"))
+dat$efLT30 <- factor(ifelse(dat$ef=="SEVERE (EF<30%)",1,0))
+#dat$p2y12 <- factor(ifelse( !is.na(dat$DPRAS) & dat$DPRAS=="YES" | !is.na(dat$DTICGR) & dat$DTICGR=="YES"| !is.na(dat$DTICL) & dat$DTICL=="YES" ,1, 0))
+dat$ace.arb.disch <- factor(ifelse( !is.na(dat$DACEI) & dat$DACEI == "YES" | !is.na(dat$DARBL) & dat$DARBL == "YES", 1, 0))
+dat$dapt <- factor(ifelse( !is.na(dat$DPLAT) & dat$DPLAT== "YES" & !is.na(dat$DASA) & dat$DASA== "YES", 1, 0))
+dat$gfrLT60 <- ifelse(dat$GFR<60,1,0)
+
+dat$SEX_F <- relevel(dat$SEX,"MALE") #for interaction models
+dat$PRENAL_NO <- as.factor(ifelse(dat$PRENAL == "NO", "YES", "NO")) #for interaction
+dat$PDIAB_NO <- as.factor(ifelse(dat$PDIAB == "NO", "YES", "NO")) ##for interaction
+
+#pvd acsis period:
+dat$period <- as.factor(ifelse(dat$SOURCE %in% c("S2000", "S2002", "S2004", "S2006"), "early", "late"))
+dat$pvd_early <- as.factor(ifelse(dat$PPVD == "YES" & dat$period == "early", "YES", "NO"))
+dat$pvd_late <- as.factor(ifelse(dat$PPVD == "YES" & dat$period == "late", "YES", "NO"))
+dat$pvd_no_early <- as.factor(ifelse(dat$PPVD == "NO" & dat$period == "early", "YES", "NO"))
+dat$pvd_no_late <- as.factor(ifelse(dat$PPVD == "NO" & dat$period == "late", "YES", "NO"))
+
+dat$pvd_period <- as.factor(ifelse(dat$pvd_early == "YES", "PVD_early",
+                                   ifelse(dat$pvd_late == "YES", "PVD_late",
+                                          ifelse(dat$pvd_no_early == "YES", "NO_PVD_early", "NO_PVD_late"))))
+
+dat$pvd_period <- factor(dat$pvd_period, levels = c("PVD_early", "PVD_late", "NO_PVD_early", "NO_PVD_late"))
+
+dat$asystole_av_block <- as.factor(ifelse(dat$COMPAVBH == "YES" | dat$COMP10 == "YES", "YES", "NO"))
+
+dat$period_3_level <- as.factor(ifelse(dat$SOURCE %in% c("S2000", "S2002", "S2004"), "early_p",
+ifelse(dat$SOURCE %in% c("S2006", "S2008", "S2010"), "mid_p", "late_p")))
+dat$period_3_level <- factor(dat$period_3_level, levels = c("early_p", "mid_p", "late_p"))
+
+dat$HOSTG[dat$HOSTG>400] <- 190
+dat$HOSLDL[dat$HOSLDL>300] <- 150
+dat$HOSHDL[dat$HOSHDL>100] <- 50
+dat$HOSCHO[dat$HOSCHO>400] <- 250
+
+# added in 20/07/18
+dat$vessel_1 <- as.factor(ifelse(dat$VESSEL %in% c('1 VESSEL', 'NONE'), 'vessel_1', ifelse(dat$VESSEL %in% c('2 VESSELS', '3 VESSELS'), 'vessel_2', dat$VESSEL)))
+dat$vessel_2 <- relevel(dat$vessel_1,"vessel_2")
+
+#pvd 1 vessel diseased:
+dat$pvd_1_vessel <- as.factor(ifelse(dat$PPVD == "YES" & dat$vessel_1 == "vessel_1", "YES", "NO"))
+dat$pvd_2_vessel <- as.factor(ifelse(dat$PPVD == "YES" & dat$vessel_1 == "vessel_2", "YES", "NO"))
+dat$pvd_no_1_vessel <- as.factor(ifelse(dat$PPVD == "NO" & dat$vessel_1 == "vessel_1", "YES", "NO"))
+dat$pvd_no_2_vessel <- as.factor(ifelse(dat$PPVD == "NO" & dat$vessel_1 == "vessel_2", "YES", "NO"))
+
+dat$pvd_vessel <- as.factor(ifelse(dat$pvd_1_vessel == "YES", "pvd_vessel_1",
+                                    ifelse(dat$pvd_2_vessel == "YES", "pvd_vessel_2",
+                                           ifelse(dat$pvd_no_1_vessel == "YES", "no_pvd_vessel1", "no_pvd_vessel2"))))
+
+
+dat$pvd_vessel <- factor(dat$pvd_vessel, levels = c("pvd_vessel_1",
+                                                    "pvd_vessel_2",
+                                                    "no_pvd_vessel1",
+                                                    "no_pvd_vessel2"))
+
+dat$re_mi_angina_30_day <- as.factor(ifelse(dat$REMI_30D == "YES" | dat$CFAP == "YES", "YES", "NO"))
+```
+
+```{r}
+table(dat$SOURCE, dat$PPVD)
+prcentCalc(dat$SOURCE, dat$PPVD)
+```
+
+```{r subgroups, echo=FALSE}
+dat_stemi <- droplevels(subset(dat, ARR_DIAG == 'STE MI'))
+dat_angio <- droplevels(subset(dat, ANGIO == 'YES'))
+
+```
+
+
+
+<br>
+
+### **Table 1 :** Baseline characteristics, treatment and outcomes by Prior PVD
+
+<br>
+
+
+```{r results="hide",warning=FALSE}
+
+#call for dictionary
+path_dict <- "C:/Users/nirsh/Dropbox/R_programes/PVD/tab1_dictionary.csv"
+# path_dict <- "E:/PVD for Metetzky by Nir/tab1_dictionary.csv"
+
+vars <- read.csv(file = path_dict ,header = F)
+
+#call for var names
+vars1 <- as.vector(read.csv(file = path_dict ,header = F,check.names = FALSE)[1:which(vars$V1=="DIED"),1])
+
+#create table1 for all
+tab1 <- print(CreateTableOne(vars = vars1, factorVars = c("PCHF","PHT","PDIAB","PCVA","PCABG","CSMOK"),
+                             strata = "PPVD", data = dat),
+              nonnormal = c("HOSPCK","HOSCHO","HOSLDL","HOSHDL","HOSTG","HOSCRE"))[,-4]
+#missing <- nmissing(vars = vars1[vars1!="NULL"],data =dat)
+#tab1 <- cbind(tab1,missing)
+#write.csv(tab1,"tab1.csv")
+
+#call for var labels
+vars1.labels <- as.vector(read.csv(file = path_dict ,header = F)[1:which(vars$V2=="Overall mortality"),2])
+rownames(tab1) <- c("n",vars1.labels)
+#colnames(tab1) <- c(levels(dat$PPVD),"P value")
+
+#check
+ which(row.names(tab1)=="Aspirin")
+# which(row.names(tab1)=="Diuretics ")
+# which(row.names(tab1)=="Door to balloon time (median,IQR) (min) ")
+
+```
+
+
+```{r}
+
+kable(tab1, format = "html",caption = "All cohort") %>%
+    kable_styling(bootstrap_options = "striped", 
+                full_width = T)%>%
+add_header_above(c(" ","PPVD" = 2," ")) %>%
+    column_spec(1, width = "25em") %>%
+  group_rows("Baseline characteristics", 2, 19) %>% 
+  group_rows("Prior medications", 20, 30) %>% 
+  group_rows("Vital signs on FMC", 31, 43) %>%
+  group_rows("Reperfusion therapy", 44, 76) %>% 
+  group_rows("In-hospital complictions", 77, 99) %>% 
+  group_rows("Laboratory tests", 100, 107) %>%
+  group_rows("Treatment at discharge", 108, 113) %>% 
+  group_rows("Medications at 30-day follow-up", 114, 119) %>% 
+  group_rows("30-Day clinical outcomes", 120, 124) %>% 
+  group_rows("Death rates", 125, 127) 
+```
+
+*Mace = 30D:DIED/UAP/MI-ISCH/CVA/ST.THRMB/FU URG.REVASC
+
+--- 
+
+<br>
+
+### **Fig.1
+
+<br>
+```{r bind graph first, echo=FALSE}
+# table_pvd <- prcentCalc.tab1d(dat$PPVD, dat$SOURCE)
+# 
+# pesi_plot <- barplot(table_pvd, main = "PVD",
+#                      xlab = "Year of Survey",
+#                      ylab="Percent %",
+#                      col= c("darkblue", "green4")
+#                      )
+# 
+# 
+# mydata_table <- data.frame(PVD=prcentCalc.tab1d(dat$PPVD,dat$SOURCE)[2,])
+# colnames(mydata_table) <- c("Prior PVD")
+# 
+# xx <- barplot(as.matrix(mydata_table), ylab="Percent %", beside=TRUE, col=c("lightblue", "mistyrose", "green4", "aquamarine", "brown", "cyan3"), ylim = c(-3,60),cex.names =  0.75,font.axis = 3, xaxt="n",mar=c(0,0,0,0))
+# 
+# legend("bottomleft", c("2000","2002", "2004", "2006", "2008", "2010", "2013", "2016"), cex=1, fill=c("lightblue", "mistyrose", "green4", "aquamarine", "brown", "cyan3"),bty = "n")
+# 
+# text(x = xx, y = as.matrix(mydata_early)+5, label = as.matrix(mydata_early), cex = 1, col = c("black"))
+# text(cex=2, x=xx[2,], y=-2, labels = colnames(mydata_early), xpd=TRUE, srt=00, pos=1 ,font = 1)
+# #title("Acsis 2013 vs. 2016", adj=0.3,cex=2)
+# chi_table <- table(dat_early$major_reject, dat_early$age_group1)
+# chisq.test(chi_table)
+```
+
+
+
+<br>
+
+### **Table 2.Baseline characteristics, treatment and outcomes by Prior PVD & Gender** 
+
+<br>
+
+```{r gender, echo=FALSE, results="hide",warning=FALSE}
+tab_male <- print(CreateTableOne(vars = vars1, factorVars = c("PCHF","PHT","PDIAB","PCVA","PCABG","CSMOK"),
+                             strata = "PPVD", data = dat[dat$SEX == "MALE",]),
+              nonnormal = c("HOSPCK","HOSCHO","HOSLDL","HOSHDL","HOSTG","HOSCRE"))[,-4]
+tab_female <- print(CreateTableOne(vars = vars1, factorVars = c("PCHF","PHT","PDIAB","PCVA","PCABG","CSMOK"),
+                             strata = "PPVD", data = dat[dat$SEX == "FEMALE",]),
+              nonnormal = c("HOSPCK","HOSCHO","HOSLDL","HOSHDL","HOSTG","HOSCRE"))[,-4]
+
+tab_gender <- cbind(tab_male, tab_female)
+
+rownames(tab_gender) <- c("n",vars1.labels)
+
+colnames(tab_gender) <- c('Male',' ',' ', 
+                              'Female', ' ', ' ')
+pvd <- c("PVD = NO", "PVD = YES", "P value", 
+            "PVD = NO", "PVD = YES", "P value")
+tab_gender <- rbind(pvd, tab_gender)
+```
+
+```{r}
+kable(tab_gender, format = "html", align = 'c') %>%
+column_spec(1, width = "30em") %>%
+kable_styling(bootstrap_options = c("striped"), full_width = T)%>%
+    column_spec(1, width = "25em") %>%
+  group_rows("Baseline characteristics", 2, 19) %>% 
+  group_rows("Prior medications", 20, 30) %>% 
+  group_rows("Vital signs on FMC", 31, 43) %>%
+  group_rows("Reperfusion therapy", 44, 76) %>% 
+  group_rows("In-hospital complictions", 77, 99) %>% 
+  group_rows("Laboratory tests", 100, 107) %>%
+  group_rows("Treatment at discharge", 108, 113) %>% 
+  group_rows("Medications at 30-day follow-up", 114, 119) %>% 
+  group_rows("30-Day clinical outcomes", 120, 124) %>% 
+  group_rows("Death rates", 125, 127) 
+```
+
+<br>
+
+### **Table 3.Baseline characteristics, treatment and outcomes by Prior PVD & Period**
+### ** Early = 2000-2006 vs Late = 2008-2016
+
+<br>
+
+```{r period, echo=FALSE, results="hide",warning=FALSE}
+dat_early <- dat[dat$period == "early",]
+dat_late <- dat[dat$period =="late",]
+var_remove <- c("academic", "CACEI", "CARBL", "CALDO", "PCIVA", "BTIMI",
+                "COMPBLTR", "FASP", "FCLOP", "FSTAT", "FACEI", "FARBL", "FBBLOCK")
+
+dat_early <- dat_early[, !(names(dat_early) %in% var_remove)] #remove al variables with NaN at early period
+dat_late <- dat_late[, !(names(dat_late) %in% var_remove)] #remove al variables with NaN at late period
+
+tab_early <- print(CreateTableOne(vars = vars1, factorVars = c("PCHF","PHT","PDIAB","PCVA","PCABG","CSMOK"),
+                             strata = "PPVD", data = dat_early),
+              nonnormal = c("HOSPCK","HOSCHO","HOSLDL","HOSHDL","HOSTG","HOSCRE"))[,-4]
+tab_late <- print(CreateTableOne(vars = vars1, factorVars = c("PCHF","PHT","PDIAB","PCVA","PCABG","CSMOK"),
+                             strata = "PPVD", data = dat_late),
+              nonnormal = c("HOSPCK","HOSCHO","HOSLDL","HOSHDL","HOSTG","HOSCRE"))[,-4]
+
+tab_period <- cbind(as.matrix(tab_early), as.matrix(tab_late))
+
+#rownames(tab_gender) <- c("n",vars1.labels)
+
+colnames(tab_period) <- c('Early period',' ',' ', 
+                              'Late period', ' ', ' ')
+pvd <- c("PVD = NO", "PVD = YES", "P value", 
+            "PVD = NO", "PVD = YES", "P value")
+tab_period <- rbind(pvd, tab_period)
+
+```
+
+```{r}
+kable(tab_period, format = "html", align = 'c') %>%
+column_spec(1, width = "30em") %>%
+kable_styling(bootstrap_options = c("striped"), full_width = T)%>%
+    column_spec(1, width = "25em")
+  # group_rows("Baseline characteristics", 2, 19) %>% 
+  # group_rows("Prior medications", 20, 30) %>% 
+  # group_rows("Vital signs on FMC", 31, 43) %>%
+  # group_rows("Reperfusion therapy", 44, 76) %>% 
+  # group_rows("In-hospital complictions", 77, 99) %>% 
+  # group_rows("Laboratory tests", 100, 107) %>%
+  # group_rows("Treatment at discharge", 108, 113) %>% 
+  # group_rows("Medications at 30-day follow-up", 114, 119) %>% 
+  # group_rows("30-Day clinical outcomes", 120, 124) %>% 
+  # group_rows("Death rates", 125, 127) 
+```
+
+--- 
+
+<br>
+
+### **Table 4.Baseline characteristics, treatment and outcomes by Prior PVD & Number of diseased vessl** 
+## *vessel_1 = 0 or 1 vessel, vessel_2 = 2 or more vessels
+<br>
+
+```{r vessel, echo=FALSE, results="hide",warning=FALSE}
+tab_vessel1 <- print(CreateTableOne(vars = vars1, factorVars = c("PCHF","PHT","PDIAB","PCVA","PCABG","CSMOK"),
+                             strata = "PPVD", data = dat[dat$vessel_1 == "vessel_1",]),
+              nonnormal = c("HOSPCK","HOSCHO","HOSLDL","HOSHDL","HOSTG","HOSCRE"))[,-4]
+tab_vessel2 <- print(CreateTableOne(vars = vars1, factorVars = c("PCHF","PHT","PDIAB","PCVA","PCABG","CSMOK"),
+                             strata = "PPVD", data = dat[dat$vessel_1 == "vessel_2",]),
+              nonnormal = c("HOSPCK","HOSCHO","HOSLDL","HOSHDL","HOSTG","HOSCRE"))[,-4]
+
+tab_vessel <- cbind(tab_vessel1, tab_vessel2)
+
+rownames(tab_vessel) <- c("n",vars1.labels)
+
+colnames(tab_vessel) <- c('Vessel 1',' ',' ', 
+                              'Vessel 2', ' ', ' ')
+pvd <- c("PVD = NO", "PVD = YES", "P value", 
+            "PVD = NO", "PVD = YES", "P value")
+tab_vessel <- rbind(pvd, tab_vessel)
+```
+
+```{r}
+kable(tab_vessel, format = "html", align = 'c') %>%
+column_spec(1, width = "30em") %>%
+kable_styling(bootstrap_options = c("striped"), full_width = T)%>%
+    column_spec(1, width = "25em") %>%
+  group_rows("Baseline characteristics", 2, 19) %>% 
+  group_rows("Prior medications", 20, 30) %>% 
+  group_rows("Vital signs on FMC", 31, 43) %>%
+  group_rows("Reperfusion therapy", 44, 76) %>% 
+  group_rows("In-hospital complictions", 77, 99) %>% 
+  group_rows("Laboratory tests", 100, 107) %>%
+  group_rows("Treatment at discharge", 108, 113) %>% 
+  group_rows("Medications at 30-day follow-up", 114, 119) %>% 
+  group_rows("30-Day clinical outcomes", 120, 124) %>% 
+  group_rows("Death rates", 125, 127) 
+```
+
+
+
+<br>
+
+### **Fig.2:** Survival Analysis
+
+<br>
+
+```{r fig.width=8, fig.height=6}
+
+fit <- survfit(Surv(time1y,status1y)~PPVD, data = dat)
+
+ ggsurvplot(fit=fit,
+           surv.scale = "percent",
+           xlab = "Time in months",
+           ylab = "Survival",
+           ylim = c(0.7, 1),
+           break.time.by = 2,
+           #linetype=c(2,1),
+           censor=F,
+           risk.table = T,
+           conf.int = T,
+           conf.int.alpha=0.1,
+           pval = T,
+           pval.coord=c(0,0.85),
+           tables.theme = theme_cleantable(),
+           plot.title =  element_text(size = 18, hjust = 0.5),
+           legend = "top",
+           legend.title="",
+           tables.height = 0.2,
+           legend.labs = c("PVD = No", "PVD = Yes"),
+           title="1-year survival"
+           #subtitle="All patients"
+           ) 
+
+summary(survfit(Surv(time1y,status1y)~PPVD, data = na.omit(dat[,c("time1y","status1y","PPVD")])),times = c(0,2,4,6,8,10,12))
+
+```
+
+
+###Forest plot for 1 Year mortality by PVD (Cox regression model)
+```{r fig.width=6}
+model1 <- coxph(Surv(time1y,status1y)~AGE+
+                  SEX+
+                  PHLIP+
+                  PHT+
+                  PDIAB+
+                  PMI+
+                  PRENAL+
+                  PCHF+
+                  period+
+                  PPVD, data = dat)
+summary(model1, times = c(2,4,6,8,10,12))
+print(model1)
+HR_model1 <- HR_CI(model1)
+
+tabtext <- cbind(c("", "Age", "Male", "Dyslipidemia", "HTN",
+                   "Diabetes", "Prior MI", "Renal Failure", "CHF",
+                   "Period = Late", "PVD"), c("HR ((95% CI)", HR_model1$total))
+
+forestplot(labeltext = tabtext, new_page = TRUE, mean = c(NA,HR_model1$HR), lower = c(NA,HR_model1$CI[,1]),
+           upper = c(NA,HR_model1$CI[,2]), clip = c(0,5.5), zero=1, 
+           boxsize = 0.1, graph.pos = 2, graphwidth = unit(3.5,"inches"), ci.vertices = TRUE,
+           xticks=c(0, 0.5, 1, 1.5, 2, 2.5), txt_gp = fpTxtGp(cex = 0.8, title = gpar(cex=1.5)),is.summary = c(T,rep(F,12)),
+           col=fpColors(box="royalblue",line="darkblue", zero = "darkgrey"),
+           title = "HR for 1 Year Mortality with 95% CI\n")
+```
+
+
+###Forest plot for 30 day MACE (Logistic regression model)
+```{r }
+m2 <- glm(MACE~AGE+
+                  SEX+
+                  PHLIP+
+                  PHT+
+                  PDIAB+
+                  PMI+
+                  PRENAL+
+                  PCHF+
+                  period+
+                  PPVD,
+                  family = "binomial", data = dat)
+summary(m2)
+m2.OR <- OR_CI(m2)
+
+tabtext1 <- cbind(c("", "Age", "Male", "Dyslipidemia", "HTN",
+                   "Diabetes", "Prior MI", "Renal Failure", "CHF",
+                   "Period = Late", "PVD"), c("OR ((95% CI)", m2.OR$total))
+
+
+forestplot(labeltext = tabtext1, new_page = TRUE, mean = c(NA,m2.OR$OR), lower = c(NA,m2.OR$CI[,1]),
+           upper = c(NA,m2.OR$CI[,2]), clip = c(0,5.5), zero=1, 
+           boxsize = 0.1, graph.pos = 2, graphwidth = unit(3.5,"inches"), ci.vertices = TRUE,
+           xticks=c(0, 0.5, 1, 1.5, 2, 2.5), txt_gp = fpTxtGp(cex = 0.9, title = gpar(cex=1.8)),is.summary = c(T,rep(F,12)),
+           col=fpColors(box="royalblue",line="darkblue", zero = "darkgrey"),
+           title = "OR for MACE with 95% CI \n")
+```
+
+
+###MACE by Prior PVD and period (early vs late)
+```{r bind graph, echo=FALSE}
+#create main data 
+mydata <- data.frame(MACE=prcentCalc.tab1d(dat$MACE,dat$PPVD)[2,])
+colnames(mydata) <- c("Prior PVD")
+
+mydata_early <- data.frame(MACE=prcentCalc.tab1d(dat_early$MACE,dat_early$PPVD)[2,])
+colnames(mydata_early) <- c("Prior PVD (Early Period)")
+
+mydata_late <- data.frame(MACE=prcentCalc.tab1d(dat_late$MACE,dat_late$PPVD)[2,])
+colnames(mydata_late) <- c("Prior PVD (Late Period)")
+
+mydata_bined <- cbind.data.frame(mydata, mydata_early, mydata_late)
+colnames(mydata_bined) <- c(" MACE (All)", "MACE (Early Perid)", "MACE (Late Perid)")
+
+xx <- barplot(as.matrix(mydata_bined), ylab="Percent %", beside=TRUE, col=c("lightblue", "green4"), ylim = c(-3,60),cex.names =  0.75,font.axis = 3, xaxt="n",mar=c(0,0,0,0))
+
+legend("topright", c("PVD = No","PVD = Yes"), cex=1, fill=c("lightblue", "green4"),bty = "n")
+
+text(x = xx, y = as.matrix(mydata_bined), pos = 3, label = as.matrix(mydata_bined), cex = 1, col = c("black"))
+text(cex=1, x=xx[2,], y=-2, labels = colnames(mydata_bined), xpd=TRUE, srt=00, pos=2 ,font = 1)
+title("30-day MACE By PVD & Period", adj=0.3,cex=2)
+```
+
+###Mortality by Prior PVD and period (early vs late)
+```{r bind graph died, echo=FALSE}
+#create main data 
+mydata_died <- data.frame(DIED365=prcentCalc.tab1d(dat$DIED365,dat$PPVD)[2,])
+colnames(mydata_died) <- c("Prior PVD")
+
+mydata_early_died <- data.frame(DIED365=prcentCalc.tab1d(dat_early$DIED365,dat_early$PPVD)[2,])
+colnames(mydata_early_died) <- c("Prior PVD (Early Period)")
+
+mydata_late_died <- data.frame(DIED365=prcentCalc.tab1d(dat_late$DIED365,dat_late$PPVD)[2,])
+colnames(mydata_late_died) <- c("Prior PVD (Late Period)")
+
+mydata_bined_died <- cbind.data.frame(mydata_died, mydata_early_died, mydata_late_died)
+colnames(mydata_bined) <- c("1-Y Mortality", "1-Y Mortality (Early Perid)", "1-Y Mortality (Late Perid)")
+
+xx <- barplot(as.matrix(mydata_bined_died), ylab="Percent %", beside=TRUE, col=c("lightblue", "green4"), ylim = c(-3,60),cex.names =  0.75,font.axis = 3, xaxt="n",mar=c(0,0,0,0))
+
+legend("topright", c("PVD = No","PVD = Yes"), cex=1, fill=c("lightblue", "green4"),bty = "n")
+
+text(x = xx, y = as.matrix(mydata_bined_died), pos = 3, label = as.matrix(mydata_bined_died), cex = 1, col = c("black"))
+text(cex=1, x=xx[2,], y=-2, labels = colnames(mydata_bined_died), xpd=TRUE, srt=00, pos=2 ,font = 1)
+title("1-Year Mortality by PVD & Period", adj=0.3,cex=2)
+```
+
+
+
+###Mortality by Prior PVD and period (early vs mid vs late)
+```{r bind graph died 3 levels, echo=FALSE}
+#create main data 
+dat_early_3_p <- dat[dat$period_3_level == "early_p",]
+dat_mid_3_p <- dat[dat$period_3_level == "mid_p",]
+dat_late_3_p <- dat[dat$period_3_level =="late_p",]
+
+
+mydata_died <- data.frame(DIED365=prcentCalc.tab1d(dat$DIED365,dat$PPVD)[2,])
+colnames(mydata_died) <- c("Prior PVD")
+
+mydata_early_3_p_died <- data.frame(DIED365=prcentCalc.tab1d(dat_early_3_p$DIED365,dat_early_3_p$PPVD)[2,])
+colnames(mydata_early_3_p_died) <- c("Prior PVD (Early Period)")
+
+mydata_mid_3_p_died <- data.frame(DIED365=prcentCalc.tab1d(dat_mid_3_p$DIED365,dat_mid_3_p$PPVD)[2,])
+colnames(mydata_mid_3_p_died) <- c("Prior PVD (Early Period)")
+
+mydata_late_3_p_died <- data.frame(DIED365=prcentCalc.tab1d(dat_late_3_p$DIED365,dat_late_3_p$PPVD)[2,])
+colnames(mydata_late_3_p_died) <- c("Prior PVD (Late Period)")
+
+mydata_bined__3_p_died <- cbind.data.frame(mydata_early_3_p_died, mydata_mid_3_p_died, mydata_late_3_p_died)
+colnames(mydata_bined__3_p_died) <- c("Early Period", "Mid Period", "Late Period")
+
+xx <- barplot(as.matrix(mydata_bined__3_p_died), ylab="Percent %", beside=TRUE, col=c("lightblue", "green4"), ylim = c(-3,60),cex.names =  0.75,font.axis = 3, xaxt="n",mar=c(0,0,0,0))
+
+legend("topright", c("PVD = No","PVD = Yes"), cex=1, fill=c("lightblue", "green4"),bty = "n")
+
+text(x = xx, y = as.matrix(mydata_bined__3_p_died), pos = 3,
+     label = as.matrix(mydata_bined__3_p_died),
+     cex = 1, col = c("black"))
+text(cex=1, x=xx[2,], y=-2, labels = colnames(mydata_bined__3_p_died), xpd=TRUE, srt=00, pos=2 ,font = 1)
+title("1-Year Mortality by PVD & Period", adj=0.3,cex=2)
+```
+
+
+<br>
+##Part 2- Propensity score matching
+<br>
+
+```{r results="hide",message=FALSE, include=FALSE}
+
+## Propensity score matching
+dat$prior_PVD <- as.logical(ifelse(dat$PPVD == "YES", 1, 0))
+#dat$PPVD <- as.logical(ifelse(dat$PPVD == 1 ,1, 0)) # run in the above table 1
+glm_gr <- glm(prior_PVD ~ AGE+
+                SEX+
+                PCHF+
+                PHLIP+
+                PMI+
+                PRENAL+
+                PDIAB+
+                PHT+
+                PCVA+
+                ADMKLP+
+                stemi,
+              family = "binomial",
+              data = dat)
+
+dat_cc=na.omit(dat[,c("SOURCE", "HAKZAA", "prior_PVD","AGE","SEX", "PCHF", "PHLIP", "PMI", "PRENAL", "PDIAB", "PHT", "PCVA", "ADMKLP", "stemi")]) #n= 14828
+dat_cc$pred <- glm_gr$fitted.values
+dat.prop <- merge(dat,dat_cc[,c("SOURCE", "HAKZAA","pred")],by=c("SOURCE", "HAKZAA"),all.x = T) 
+dat.prop <- subset(dat.prop,!is.na(dat.prop$pred)) #n=14828
+#for caliper
+#sd(dat.prop$pred) #sd=0.124
+#tapply(dat.prop$pred,dat.prop$prop.group,sd) #sd= (0.125 , 0.108)
+
+# library(plyr)
+# labs <- paste("Actual group:", c("more then 24H", "in 24H"))
+# dat.prop %>%
+#   mutate(prop.group = ifelse(prop.group == 0, labs[1], labs[2])) %>%
+#   ggplot(aes(x = pred)) +
+#   geom_histogram(color = "white") +
+#   facet_wrap(~prop.group) +
+#   xlab("Probability of going rep. in 24 hours") +
+#   theme_bw()
+
+
+library(Matching)
+set.seed(20)
+# one-to-two matching without replacement
+rr1 <- Match(Y=NULL, Tr=dat.prop$prior_PVD, X=dat.prop$pred, M=2, ties = FALSE,replace=FALSE,caliper = 0.03)
+
+
+dfTC1 = data.frame(idxTreated = rr1$index.treated, idxControl = rr1$index.control,
+                   numControl = factor(rep(1:2), labels = paste0("Control",1:2)))
+dfTCWide1 = reshape2::dcast(dfTC1, idxTreated ~ numControl,
+                            value.var = "idxControl")
+
+dat.prop$row <- row.names(dat.prop)
+dat_m <- dat.prop[c(t(dfTCWide1)),]
+
+
+#summary2 <- function(x) {round(c(summary(x),SD=sd2(x)),1)}
+#tab.before <- tapply(dat.prop$pred , dat.prop$prop.group, summary2)
+#tab.after <- tapply(dat_m$pred , dat_m$prop.group, summary2)
+
+dat_matched <- dat_m  # the matched data set
+```
+
+
+## Post Propensity Score Matching table 1:
+```{r table 1 post matching , include=FALSE}
+var_tab1 <- c("AGE", "SEX", "PHLIP", "PHT", "PDIAB", "PMI", "PSPCI", "PRENAL", "PCVA", "PCHF", "graceGT140", "ADMKLP")
+tab1 <- print(CreateTableOne(vars = var_tab1,
+                             strata = "prior_PVD",
+                             data = dat_matched))[,-4]
+colnames(tab1) <- c("PVD = NO", "PVD = YES", "p-value")
+row.names(tab1) <- c("n", "Age", "Male (%)", "Dyslipidemia (%)", "Hypertension (%)", "Diabetes mellitus (%)", "Prior MI (%)", "Prior PCI (%)", "Renal Failure (%)", "Prior Stroke (%)", "CHF (%)", "GRACE > 140 (%)", "Admission Killip", "Killip 1", "Killip 2", "Killip 3", "Killip 4")
+```
+
+```{r, echo=FALSE}
+kable(tab1, align = "c", caption = "Table1 - post matching")
+```
+
+
+<br>
+
+### **Fig.3:** Survival Analysis- With Propensity Score Matching
+
+<br>
+
+```{r fig.width=8, fig.height=6}
+
+fit <- survfit(Surv(time1y,status1y)~prior_PVD, data = dat_matched)
+
+ ggsurvplot(fit=fit,
+           surv.scale = "percent",
+           xlab = "Time in months",
+           ylab = "Survival",
+           ylim = c(0.7, 1),
+           break.time.by = 2,
+           #linetype=c(2,1),
+           censor=F,
+           risk.table = T,
+           conf.int = T,
+           conf.int.alpha=0.1,
+           pval = T,
+           pval.coord=c(0,0.85),
+           tables.theme = theme_cleantable(),
+           plot.title =  element_text(size = 18, hjust = 0.5),
+           legend = "top",
+           legend.title="",
+           tables.height = 0.2,
+           legend.labs = c("PVD = No", "PVD = Yes"),
+           title="1-year survival",
+           linetype = c("solid", "dashed")
+           #subtitle="All patients"
+           ) 
+
+summary(survfit(Surv(time1y,status1y)~PPVD, data = na.omit(dat_matched[,c("time1y","status1y","PPVD")])),times = c(0,2,4,6,8,10,12))
+
+```
+
+
+##additional analysis
+--- 
+
+<br>
+
+### **Fig.4:** Survival Analysis four grops (unadjusted)
+
+<br>
+
+```{r fig.width=8, fig.height=6}
+
+fit <- survfit(Surv(time1y,status1y)~pvd_period, data = dat)
+
+ ggsurvplot(fit=fit,
+           surv.scale = "percent",
+           xlab = "Time in months",
+           ylab = "Survival",
+           ylim = c(0.7, 1),
+           break.time.by = 2,
+           #linetype=c(2,1),
+           censor=F,
+           risk.table = T,
+           conf.int = T,
+           conf.int.alpha=0.1,
+           pval = T,
+           pval.coord=c(0,0.85),
+           tables.theme = theme_cleantable(),
+           plot.title =  element_text(size = 18, hjust = 0.5),
+           legend = "top",
+           legend.title="",
+           tables.height = 0.2,
+           legend.labs = c("PVD + early period", "PVD + late period", "No PVD + early period", "No PVD + late period"),
+           title="1-year survival"
+           #subtitle="All patients"
+           ) 
+
+summary(survfit(Surv(time1y,status1y)~pvd_period, data = na.omit(dat[,c("time1y","status1y","pvd_period")])),times = c(0,2,4,6,8,10,12))
+
+```
+
+<br>
+
+### **Fig.5:** Survival Analysis four grops according to vessel diseased (unadjusted)
+
+<br>
+
+```{r fig.width=8, fig.height=6}
+
+
+
+fit <- survfit(Surv(time1y,status1y)~pvd_vessel, data = dat)
+
+ ggsurvplot(fit=fit,
+           surv.scale = "percent",
+           xlab = "Time in months",
+           ylab = "Survival",
+           ylim = c(0.7, 1),
+           break.time.by = 2,
+           #linetype=c(2,1),
+           censor=F,
+           risk.table = T,
+           conf.int = T,
+           conf.int.alpha=0.1,
+           pval = T,
+           pval.coord=c(0,0.85),
+           tables.theme = theme_cleantable(),
+           plot.title =  element_text(size = 18, hjust = 0.5),
+           legend = "top",
+           legend.title="",
+           tables.height = 0.2,
+           legend.labs = c("PAD + 1 vessel", "PAD + Multivessel", "No PAD + 1 vessel", "No PAD + Multivessel"),
+           title="1-year survival",
+           linetype = c("dashed", "dashed", "solid", "solid"),
+           color = "strata",
+           palette =  c("gray48", "gray49", "gray8", "gray9")
+           #subtitle="All patients"
+           ) 
+
+summary(survfit(Surv(time1y,status1y)~pvd_vessel, data = na.omit(dat[,c("time1y","status1y","pvd_vessel")])),times = c(0,2,4,6,8,10,12))
+
+```
+
+##Box plot: Total Cholesterol, LDL, HDL, TG
+```{r}
+par(mfrow = c(1, 4)) #3 define the number of boxplots
+
+box1 <- boxplot(HOSCHO~PPVD, data = dat, main =  "Total CHOL by PVD", notch = TRUE, col = c("blue", "green4"))
+legend("bottomright", legend = c("PVD = No","PVD = Yes"), 
+    col = c("blue", "green4") ,
+    bty = "n",
+    pch=20 ,
+    pt.cex = 3,
+    cex = 1,
+    horiz = FALSE,
+    inset = c(0.03, 0.05))
+
+box2 <- boxplot(HOSLDL~PPVD, data = dat, main = "LDL by PVD", notch = TRUE, col = c("blue", "green4"))
+legend("bottomright", legend = c("PVD = No","PVD = Yes"), 
+    col = c("blue", "green4") ,
+    bty = "n",
+    pch=20 ,
+    pt.cex = 3,
+    cex = 1,
+    horiz = FALSE,
+    inset = c(0.03, 0.05))
+
+box3 <- boxplot(HOSHDL~PPVD, data = dat, main = "HDL by PVD", notch = TRUE, col = c("blue", "green4"))
+legend("bottomright", legend = c("PVD = No","PVD = Yes"), 
+    col = c("blue", "green4") ,
+    bty = "n",
+    pch=20 ,
+    pt.cex = 3,
+    cex = 1,
+    horiz = FALSE,
+    inset = c(0.03, 0.05))
+
+
+box4 <- boxplot(HOSTG~PPVD, data = dat, main =  "Total TG by PVD", notch = TRUE, col = c("blue", "green4"))
+legend("bottomright", legend = c("PVD = No","PVD = Yes"), 
+    col = c("blue", "green4") ,
+    bty = "n",
+    pch=20 ,
+    pt.cex = 3,
+    cex = 1,
+    horiz = FALSE,
+    inset = c(0.03, 0.05))
+
+```
+
+
+<br>
+
+### **Fig.6:** Survival Analysis PVD grop only (unadjusted)
+
+<br>
+
+```{r fig.width=8, fig.height=6}
+
+dat_pvd <- dat[dat$PPVD == "YES",]
+
+fit <- survfit(Surv(time1y,status1y)~period, data = dat_pvd)
+
+ ggsurvplot(fit=fit,
+           surv.scale = "percent",
+           xlab = "Time in months",
+           ylab = "Survival",
+           ylim = c(0.7, 1),
+           break.time.by = 2,
+           #linetype=c(2,1),
+           censor=F,
+           risk.table = T,
+           conf.int = T,
+           conf.int.alpha=0.1,
+           pval = T,
+           pval.coord=c(0,0.85),
+           tables.theme = theme_cleantable(),
+           plot.title =  element_text(size = 18, hjust = 0.5),
+           legend = "top",
+           legend.title="",
+           tables.height = 0.2,
+           legend.labs = c("early period", "late period"),
+           title="1-year survival",
+           linetype = c("solid", "dashed")
+           #subtitle="All patients"
+           ) 
+
+summary(survfit(Surv(time1y,status1y)~period, data = na.omit(dat_pvd[,c("time1y","status1y","period")])),times = c(0,2,4,6,8,10,12))
+
+```
+
+<br>
+
+### **Fig.6:** Survival Analysis PVD=NO grop only (unadjusted)
+
+<br>
+
+```{r fig.width=8, fig.height=6}
+
+dat_no_pvd <- dat[dat$PPVD == "NO",]
+
+fit <- survfit(Surv(time1y,status1y)~period, data = dat_no_pvd)
+
+ ggsurvplot(fit=fit,
+           surv.scale = "percent",
+           xlab = "Time in months",
+           ylab = "Survival",
+           ylim = c(0.7, 1),
+           break.time.by = 2,
+           #linetype=c(2,1),
+           censor=F,
+           risk.table = T,
+           conf.int = T,
+           conf.int.alpha=0.1,
+           pval = T,
+           pval.coord=c(0,0.85),
+           tables.theme = theme_cleantable(),
+           plot.title =  element_text(size = 18, hjust = 0.5),
+           legend = "top",
+           legend.title="",
+           tables.height = 0.2,
+           legend.labs = c("early period", "late period"),
+           title="1-year survival"
+           #subtitle="All patients"
+           ) 
+
+summary(survfit(Surv(time1y,status1y)~period, data = na.omit(dat_no_pvd[,c("time1y","status1y","period")])),times = c(0,2,4,6,8,10,12))
+
+```
+
+
+```{r}
+dat$PPVD[is.na(dat$PPVD)] <- "NO"
+bar_plot <- ggplot(dat, aes(SOURCE, fill = PPVD)) + geom_bar(position = "fill")
+                    
+bar_plot
+```
+
+```{r}
+bar2 <- ggplot(dat, aes(SOURCE, PPVD, fill = PPVD)) + geom_bar(stat = "identity")
+
+bar2
+```
+
+#additional analysis (20/7/18)
+##patients underwent angio
+```{r table angio, include=FALSE}
+var_tab1 <- c('vessel_1', 'ANYPCI', 'HCABG')
+tab1 <- print(CreateTableOne(vars = var_tab1, strata = "PPVD", data = dat_angio))[,-4]
+colnames(tab1) <- c("No PVD", "PVD", "p-value")
+row.names(tab1) <- c(" ", "2+ vessel (%)", "PCI (%)", "CABG (%)")
+```
+
+```{r, echo=FALSE}
+kable(tab1, align = "c", caption = "Table2")
+```
+
+<br>
+
+<br>
+
+# Interactions (2.8.18)
+
+```{r interaction models, results='hide'}
+#Models for age65 (GT=greater than; LE=less/even)
+mod_int_ageGT65 <- coxph(Surv(time1y, status1y)~PPVD*ageGT65, data = dat) #HR for age<=65
+summary(mod_int_ageGT65)
+
+HR_ageLE65 <- HR_CI(mod_int_ageGT65)
+
+mod_int_ageLE65 <- coxph(Surv(time1y, status1y)~PPVD*ageLE65, data = dat) #HR for age>65
+summary(mod_int_ageLE65)
+
+HR_ageGT65 <- HR_CI(mod_int_ageLE65)
+
+#Models for gender
+mod_int_male <- coxph(Surv(time1y, status1y)~PPVD*SEX, data = dat) #HR for women
+summary(mod_int_male)
+
+HR_female <- HR_CI(mod_int_male)
+
+mod_int_female <- coxph(Surv(time1y, status1y)~PPVD*SEX_F, data = dat) #HR for men
+summary(mod_int_female)
+
+HR_male <- HR_CI(mod_int_female)
+
+#Models for vessel
+mod_int_vessel1 <- coxph(Surv(time1y, status1y)~PPVD*vessel_2, data = dat) #HR for vessel 2
+summary(mod_int_vessel1)
+
+HR_vessel2 <- HR_CI(mod_int_vessel1)
+
+mod_int_vessel2 <- coxph(Surv(time1y, status1y)~PPVD*vessel_1, data = dat) #HR for vessel 1
+summary(mod_int_vessel2)
+
+HR_vessel1 <- HR_CI(mod_int_vessel2)
+
+#Models for crf
+mod_int_crf_no <- coxph(Surv(time1y, status1y)~PPVD*PRENAL_NO, data = dat) #HR for CRF = NO
+summary(mod_int_crf_no)
+
+HR_crf_no <- HR_CI(mod_int_crf_no)
+
+mod_int_crf_yes <- coxph(Surv(time1y, status1y)~PPVD*PRENAL, data = dat) #HR for CRF = YES
+summary(mod_int_crf_yes)
+
+HR_crf_yes <- HR_CI(mod_int_crf_yes)
+
+#Models for Diabetes mellitus
+mod_int_DM_no <- coxph(Surv(time1y, status1y)~PPVD*PDIAB_NO, data = dat) #HR for DM = NO
+summary(mod_int_DM_no)
+
+HR_DM_no <- HR_CI(mod_int_DM_no)
+
+mod_int_DM_yes <- coxph(Surv(time1y, status1y)~PPVD*PDIAB, data = dat) #HR for DM = YES
+summary(mod_int_DM_yes)
+
+HR_DM_yes <- HR_CI(mod_int_DM_yes)
+```
+
+### Interaction with age
+
+```{r ageGT65, results='asis'}
+stargazer(title = "Cox PH with interaction term: HR for 1 year mortality with 95% CI",
+          mod_int_ageGT65,
+          apply.coef = exp,
+          ci= c(rep(TRUE,11)),
+          ci.custom = list(exp(confint(mod_int_ageGT65))),
+          t.auto = F,
+          report = c("vc*sp"),
+          notes.append = F,
+          notes = c("*p<0.1","**p<0.05","***p<0.01"),
+          digits = 3,
+          omit = "Constant",
+          model.numbers = F,
+          keep.stat = "n",
+          covariate.labels = c("PPVD","Age>65","PPVD:age>65"),
+          # column.labels = c("-----**Interaction with time model**-----"),
+          dep.var.labels = "1 year mortality",
+          type = "html"
+          )
+
+```
+
+<br>
+
+<br>
+
+```{r ageLE65, results='asis'}
+stargazer(title = "Cox PH with interaction term: HR for 1 year mortality with 95% CI",
+          mod_int_ageLE65,
+          apply.coef = exp,
+          ci= c(rep(TRUE,11)),
+          ci.custom = list(exp(confint(mod_int_ageLE65))),
+          t.auto = F,
+          report = c("vc*sp"),
+          notes.append = F,
+          notes = c("*p<0.1","**p<0.05","***p<0.01"),
+          digits = 3,
+          omit = "Constant",
+          model.numbers = F,
+          keep.stat = "n",
+          covariate.labels = c("PPVD","Age<=65","PPVD:age<=65"),
+          # column.labels = c("-----**Interaction with time model**-----"),
+          dep.var.labels = "1 year mortality",
+          type = "html"
+          )
+
+```
+
+<br>
+
+<br>
+
+
+### Interaction with gender
+
+```{r gender male, results='asis'}
+stargazer(title = "Cox PH with interaction term: HR for 1 year mortality with 95% CI",
+          mod_int_male,
+          apply.coef = exp,
+          ci= c(rep(TRUE,11)),
+          ci.custom = list(exp(confint(mod_int_male))),
+          t.auto = F,
+          report = c("vc*sp"),
+          notes.append = F,
+          notes = c("*p<0.1","**p<0.05","***p<0.01"),
+          digits = 3,
+          omit = "Constant",
+          model.numbers = F,
+          keep.stat = "n",
+          covariate.labels = c("PPVD","Gender=Male","PPVD:Gender=Male"),
+          # column.labels = c("-----**Interaction with time model**-----"),
+          dep.var.labels = "1 year mortality",
+          type = "html"
+          )
+
+```
+
+<br>
+
+<br>
+
+```{r gender female, results='asis'}
+stargazer(title = "Cox PH with interaction term: HR for 1 year mortality with 95% CI",
+          mod_int_female,
+          apply.coef = exp,
+          ci= c(rep(TRUE,11)),
+          ci.custom = list(exp(confint(mod_int_female))),
+          t.auto = F,
+          report = c("vc*sp"),
+          notes.append = F,
+          notes = c("*p<0.1","**p<0.05","***p<0.01"),
+          digits = 3,
+          omit = "Constant",
+          model.numbers = F,
+          keep.stat = "n",
+          covariate.labels = c("PPVD","Gender=Female","PPVD:Gender=Female"),
+          # column.labels = c("-----**Interaction with time model**-----"),
+          dep.var.labels = "1 year mortality",
+          type = "html"
+          )
+
+```
+
+<br>
+
+<br>
+
+
+### Interaction with number of vessels
+
+```{r vessels none or 1, results='asis'}
+stargazer(title = "Cox PH with interaction term: HR for 1 year mortality with 95% CI",
+          mod_int_vessel1,
+          apply.coef = exp,
+          ci= c(rep(TRUE,11)),
+          ci.custom = list(exp(confint(mod_int_vessel1))),
+          t.auto = F,
+          report = c("vc*sp"),
+          notes.append = F,
+          notes = c("*p<0.1","**p<0.05","***p<0.01"),
+          digits = 3,
+          omit = "Constant",
+          model.numbers = F,
+          keep.stat = "n",
+          covariate.labels = c("PPVD","Vessels=none or 1","PPVD:vessels=none or 1"),
+          # column.labels = c("-----**Interaction with time model**-----"),
+          dep.var.labels = "1 year mortality",
+          type = "html"
+          )
+
+
+```
+
+<br>
+
+<br>
+
+```{r vessels 2 or 3, results='asis'}
+stargazer(title = "Cox PH with interaction term: HR for 1 year mortality with 95% CI",
+          mod_int_vessel2,
+          apply.coef = exp,
+          ci= c(rep(TRUE,11)),
+          ci.custom = list(exp(confint(mod_int_vessel2))),
+          t.auto = F,
+          report = c("vc*sp"),
+          notes.append = F,
+          notes = c("*p<0.1","**p<0.05","***p<0.01"),
+          digits = 3,
+          omit = "Constant",
+          model.numbers = F,
+          keep.stat = "n",
+          covariate.labels = c("PPVD","Vessels 2 or 3","PPVD:vessels 2 or 3"),
+          # column.labels = c("-----**Interaction with time model**-----"),
+          dep.var.labels = "1 year mortality",
+          type = "html"
+          )
+
+```
+
+<br>
+
+### Interaction with chronic Renal Failure
+```{r crf no, results='asis'}
+stargazer(title = "Cox PH with interaction term: HR for 1 year mortality with 95% CI",
+          mod_int_crf_no,
+          apply.coef = exp,
+          ci= c(rep(TRUE,11)),
+          ci.custom = list(exp(confint(mod_int_crf_no))),
+          t.auto = F,
+          report = c("vc*sp"),
+          notes.append = F,
+          notes = c("*p<0.1","**p<0.05","***p<0.01"),
+          digits = 3,
+          omit = "Constant",
+          model.numbers = F,
+          keep.stat = "n",
+          covariate.labels = c("PPVD","CRF = YES","PPVD:CRF = YES"),
+          # column.labels = c("-----**Interaction with time model**-----"),
+          dep.var.labels = "1 year mortality",
+          type = "html"
+          )
+
+
+```
+
+<br>
+
+<br>
+
+```{r crf yes, results='asis'}
+stargazer(title = "Cox PH with interaction term: HR for 1 year mortality with 95% CI",
+          mod_int_crf_yes,
+          apply.coef = exp,
+          ci= c(rep(TRUE,11)),
+          ci.custom = list(exp(confint(mod_int_crf_yes))),
+          t.auto = F,
+          report = c("vc*sp"),
+          notes.append = F,
+          notes = c("*p<0.1","**p<0.05","***p<0.01"),
+          digits = 3,
+          omit = "Constant",
+          model.numbers = F,
+          keep.stat = "n",
+          covariate.labels = c("PPVD","CRF = NO","PPVD:CRF = NO"),
+          # column.labels = c("-----**Interaction with time model**-----"),
+          dep.var.labels = "1 year mortality",
+          type = "html"
+          )
+```
+<br>
+
+### Interaction with Diabetes Mellitus failure
+```{r dm  no, results='asis'}
+stargazer(title = "Cox PH with interaction term: HR for 1 year mortality with 95% CI",
+          mod_int_DM_no,
+          apply.coef = exp,
+          ci= c(rep(TRUE,11)),
+          ci.custom = list(exp(confint(mod_int_DM_no))),
+          t.auto = F,
+          report = c("vc*sp"),
+          notes.append = F,
+          notes = c("*p<0.1","**p<0.05","***p<0.01"),
+          digits = 3,
+          omit = "Constant",
+          model.numbers = F,
+          keep.stat = "n",
+          covariate.labels = c("PPVD","DM = YES","PPVD:DM = YES"),
+          # column.labels = c("-----**Interaction with time model**-----"),
+          dep.var.labels = "1 year mortality",
+          type = "html"
+          )
+
+
+```
+
+<br>
+
+<br>
+
+```{r dm yes, results='asis'}
+stargazer(title = "Cox PH with interaction term: HR for 1 year mortality with 95% CI",
+          mod_int_DM_yes,
+          apply.coef = exp,
+          ci= c(rep(TRUE,11)),
+          ci.custom = list(exp(confint(mod_int_DM_yes))),
+          t.auto = F,
+          report = c("vc*sp"),
+          notes.append = F,
+          notes = c("*p<0.1","**p<0.05","***p<0.01"),
+          digits = 3,
+          omit = "Constant",
+          model.numbers = F,
+          keep.stat = "n",
+          covariate.labels = c("PPVD","DM = NO","PPVD:DM = NO"),
+          # column.labels = c("-----**Interaction with time model**-----"),
+          dep.var.labels = "1 year mortality",
+          type = "html"
+          )
+```
+<br>
+
+<br>
+
+```{r fig.width=9, fig.height=6}
+HR <- rbind(NA, NA,HR_ageLE65$HR[1], HR_ageGT65$HR[1], NA, HR_female$HR[1], HR_male$HR[1], NA, HR_vessel1$HR[1], HR_vessel2$HR[1], NA, HR_crf_no$HR[1], HR_crf_yes$HR[1], NA, HR_DM_no$HR[1], HR_DM_yes$HR[1])
+
+CI_lower <- rbind(NA, NA, HR_ageLE65$CI[1,1], HR_ageGT65$CI[1,1], NA, HR_female$CI[1,1], HR_male$CI[1,1], NA, HR_vessel1$CI[1,1], HR_vessel2$CI[1,1], NA, HR_crf_no$CI[1,1], HR_crf_yes$CI[1,1], NA, HR_DM_no$CI[1,1], HR_DM_yes$CI[1,1])
+
+CI_upper <- rbind(NA, NA, HR_ageLE65$CI[1,2], HR_ageGT65$CI[1,2], NA, HR_female$CI[1,2], HR_male$CI[1,2], NA, HR_vessel1$CI[1,2], HR_vessel2$CI[1,2], NA, HR_crf_no$CI[1,2], HR_crf_yes$CI[1,2], NA, HR_DM_no$CI[1,2], HR_DM_yes$CI[1,2])
+
+HR_total <- rbind("", HR_ageLE65$total[1], HR_ageGT65$total[1], "", HR_female$total[1], HR_male$total[1], "", HR_vessel1$total[1], HR_vessel2$total[1],"", HR_crf_no$total[1], HR_crf_yes$total[1],"", HR_DM_no$total[1], HR_DM_yes$total[1])
+
+effects_int <- cbind(
+  c("Interaction variable","Age","     <=65","     >65","Gender","     Women","     Men","Number of vessels","    none or 1","    2 or 3","CRF","    YES","    NO","DM","    YES","    NO"),
+  c("HR (95% CI)",HR_total)
+)
+
+forestplot(labeltext = effects_int, 
+           new_page = T, 
+           mean = HR, lower = CI_lower, upper = CI_upper,
+           zero=1, xticks = 0:6, boxsize = 0.1,
+           ci.vertices = TRUE,
+           graph.pos = 2,
+           graphwidth = unit(3,"inches"),
+           txt_gp = fpTxtGp(cex = 0.9,ticks = gpar(cex=0.5),title = gpar(cex=1.5)), is.summary = c(T,T,F,F,T,F,F,T,F,F,T,F,F,T,F,F),
+           col=fpColors(box="royalblue",line="darkblue", zero = "darkgrey"),
+           title = "HR for Mortality with 95% CI")
+
+```
+
+<br>
+
+<br>
+
+### Interactions with stratified data method
+
+```{r results='hide'}
+#Comparing interactions with stratified data method
+
+mod_int_ageGT650 <- coxph(Surv(time1y, status1y)~PPVD, data = subset(dat, ageLE65==1)) #HR for age<=65
+summary(mod_int_ageGT650)
+
+HR_ageLE650 <- HR_CI(mod_int_ageGT650)
+
+mod_int_ageLE650 <- coxph(Surv(time1y, status1y)~PPVD, data = subset(dat, ageGT65==1)) #HR for age>65
+summary(mod_int_ageLE650)
+
+HR_ageGT650 <- HR_CI(mod_int_ageLE650)
+
+#Models for gender
+mod_int_female0 <- coxph(Surv(time1y, status1y)~PPVD, data = subset(dat, SEX=="FEMALE")) #HR for women
+summary(mod_int_female0)
+
+HR_female0 <- HR_CI(mod_int_female0)
+
+mod_int_male0 <- coxph(Surv(time1y, status1y)~PPVD, data = subset(dat, SEX=="MALE")) #HR for men
+summary(mod_int_male0)
+
+HR_male0 <- HR_CI(mod_int_male0)
+
+#Models for vessel
+mod_int_vessel20 <- coxph(Surv(time1y, status1y)~PPVD, data = subset(dat, vessel_2=="vessel_2")) #HR for vessel 2
+summary(mod_int_vessel20)
+
+HR_vessel20 <- HR_CI(mod_int_vessel20)
+
+mod_int_vessel10 <- coxph(Surv(time1y, status1y)~PPVD, data = subset(dat, vessel_2=="vessel_1")) #HR for vessel 1
+summary(mod_int_vessel10)
+
+HR_vessel10 <- HR_CI(mod_int_vessel10)
+
+
+HR_total0 <- rbind("", HR_ageLE650$total[1], HR_ageGT650$total[1], "", HR_female0$total[1], HR_male0$total[1], "", HR_vessel10$total[1], HR_vessel20$total[1])
+
+effects_int0 <- cbind(
+  c("Interaction variable","Age","     <=65","     >65","Gender","     Women","     Men","Number of vessels","    none or 1","    2 or 3"),
+  c("HR (95% CI)",HR_total0)
+)
+```
+
+```{r}
+kable(effects_int0, align = "lc","html") %>%
+  kable_styling(full_width = T) %>%
+  add_indent(c(3,4,6,7,9,10))
+```
+
+
+<br>
+
+<br>
+
+<br>
